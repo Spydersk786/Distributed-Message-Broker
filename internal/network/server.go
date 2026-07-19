@@ -1,21 +1,28 @@
 package network
 
 import (
+	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net"
-	"fmt"
+	"sync"
 )
 
 type Server struct{
 	listenAddr string
 	ln 		   net.Listener
+	// struct{} used as this channel doesn't need to pass any data and is just used for signaling
+	// struct{} is a 0 Byte signal reducing unnecessary memory allocation and garbage collection
+	quit 	   chan struct{}
+	wg 		   sync.WaitGroup
 }
 
 func NewServer(listenAddr string) (*Server){
 	return &Server{
 		listenAddr : listenAddr,
+		quit : make(chan struct{}),
 	}
 } 
 
@@ -26,7 +33,6 @@ func (s *Server) Start() error{
 	}
 	s.ln = ln
 	log.Printf("Broker listening on %s\n", s.listenAddr)
-
 	return s.acceptLoop()
 }
 
@@ -34,16 +40,26 @@ func (s *Server) acceptLoop() error{
     for {
         conn, err := s.ln.Accept()
         if err != nil {
-            log.Printf("Error accepting conn: %v\n", err)
-            continue
+			// See docs/references.md
+			select{
+			case <-s.quit:
+				return nil
+			default:
+				log.Printf("Accept error: %v\n", err)
+			}
         }
 
+		log.Printf("New Connection from: %s\n", conn.RemoteAddr())
+		// Track the connection before spinning up the goroutine
+		s.wg.Add(1)
         go s.handleConnection(conn)
     }
 }
 
 func (s *Server) handleConnection(conn net.Conn){
+	defer s.wg.Done()
 	defer conn.Close()
+	defer log.Printf("Connection closed: %s\n",conn.RemoteAddr())
 
     payloadSizeBuf := make([]byte, 4)
     
@@ -77,3 +93,27 @@ func (s *Server) handleConnection(conn net.Conn){
 	}
 }
 
+func (s *Server) Shutdown(ctx context.Context) error{
+	log.Println("Initiating gracefull Shutdown")
+
+	// Signal the accept loop to stop treating Accept errors as anomalies
+	close(s.quit)
+
+	err := s.ln.Close()
+
+	done := make(chan struct{})
+
+	go func ()  {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select{
+	case <-done:
+		log.Println("All active connections finished gracefully.")
+		return err
+	case <-ctx.Done():
+		log.Println("Shutdown timeout exceeded. Forcing exit.")
+		return ctx.Err()
+	}
+}
