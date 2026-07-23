@@ -3,11 +3,12 @@ package network
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"sync"
+
+	"github.com/Spydersk786/broker/internal/protocol"
 )
 
 type Server struct{
@@ -17,12 +18,14 @@ type Server struct{
 	// struct{} is a 0 Byte signal reducing unnecessary memory allocation and garbage collection
 	quit 	   chan struct{}
 	wg 		   sync.WaitGroup
+	route 	   *protocol.Router
 }
 
-func NewServer(listenAddr string) (*Server){
+func NewServer(listenAddr string, router *protocol.Router) *Server {
 	return &Server{
 		listenAddr : listenAddr,
 		quit : make(chan struct{}),
+		route: router,
 	}
 } 
 
@@ -89,7 +92,34 @@ func (s *Server) handleConnection(conn net.Conn){
 			return
 		}
 
-		fmt.Printf("Recieved %d bytes: %s\n", payloadSize, string(payloadBuf))
+		if len(payloadBuf) < 1{
+			log.Println("Payload too short to contain command code")
+			return
+		}
+
+		cmdCode := protocol.CommandCode(payloadBuf[0])
+		actualPayload := payloadBuf[1:]
+
+		respPayload, err := s.route.Route(cmdCode,actualPayload)
+		if err != nil {
+			log.Printf("Routing error: %v\n", err)
+			continue
+		}
+
+		respSize := uint32(len(respPayload))
+		
+		// Buffur that can accomodate both the header that contains response length for client
+		// and the actual response
+		responseBuf := make([]byte, 4 + respSize)
+		
+		binary.BigEndian.PutUint32(responseBuf[0:4], respSize)
+		
+		copy(responseBuf[4:], respPayload)
+
+		if _, err := conn.Write(responseBuf); err != nil{
+			log.Printf("Error writting response: %v\n", err)
+			return
+		}
 	}
 }
 

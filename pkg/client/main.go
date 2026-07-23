@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
-	"fmt"
+	"io"
+	"log"
 	"net"
 )
 
@@ -11,21 +11,40 @@ func main() {
     // Connect to the server
     conn, err := net.Dial("tcp", "localhost:8090")
     if err != nil {
-        fmt.Println(err)
-        return
+       log.Fatalf("Failed to connect: %v", err)
+    }
+    defer conn.Close()
+
+    cmdByte := byte(1)
+    message := []byte("Hello Broker")
+
+    payload := append([]byte{cmdByte}, message...)
+    payloadSize := uint32(len(payload))
+
+    req := make([]byte, 4+payloadSize)
+    
+    binary.BigEndian.PutUint32(req[0:4], payloadSize)
+    copy(req[4:], payload)
+
+    if _, err := conn.Write(req); err !=nil{
+        log.Fatalf("Failed to write: %v", err)
     }
 
-    payload := []byte("Hello World!")
-    payloadLength := uint32(12)
-    fmt.Printf("payload length sent:%d", payloadLength)
-    buf := new(bytes.Buffer)
+    sizeBuf := make([]byte, 4)
 
-    err = binary.Write(buf, binary.BigEndian, payloadLength)
-	buf.WriteTo(conn)
-    conn.Write(payload)
+    if _, err := io.ReadFull(conn, sizeBuf); err != nil{
+        log.Fatalf("Error reading response: %v", err)
+    }
 
-    // Close the connection
-    conn.Close()
+    size := binary.BigEndian.Uint32(sizeBuf)
+
+    responseBuf := make([]byte, size)
+    
+    if _, err := io.ReadFull(conn, responseBuf); err != nil{
+        log.Fatalf("Error reading response: %v", err)
+    }
+
+    log.Printf("Response from server: %s", string(responseBuf))
 }
 
 

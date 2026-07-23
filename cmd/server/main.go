@@ -8,10 +8,24 @@ import (
 	"time"
 
 	"github.com/Spydersk786/broker/internal/network"
+	"github.com/Spydersk786/broker/internal/protocol"
 )
 
 func main() {
-    server := network.NewServer(":8090")
+    router := protocol.NewRouter()
+
+    router.Register(protocol.ProduceCmd, func(payload []byte) ([]byte, error){
+        log.Printf("Produce Handler recieved: %s", string(payload))
+        return []byte("Produce Succeeded"), nil
+    })
+
+    router.Register(protocol.FetchCmd, func(payload []byte) ([]byte, error){
+        log.Printf("Fetch Handler recieved: %s", string(payload))
+        return []byte("Fetch Succeeded"), nil
+    })
+
+
+    server := network.NewServer(":8090", router)
 
     go func ()  {
         if err := server.Start(); err != nil {
