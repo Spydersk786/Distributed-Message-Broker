@@ -9,15 +9,14 @@ import (
 
 	"github.com/Spydersk786/broker/internal/network"
 	"github.com/Spydersk786/broker/internal/protocol"
+	"github.com/Spydersk786/broker/internal/topic"
 )
 
 func main() {
     router := protocol.NewRouter()
+    topicMgr := topic.NewManager()
 
-    router.Register(protocol.ProduceCmd, func(payload []byte) ([]byte, error){
-        log.Printf("Produce Handler recieved: %s", string(payload))
-        return []byte("Produce Succeeded"), nil
-    })
+    router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
 
     router.Register(protocol.FetchCmd, func(payload []byte) ([]byte, error){
         log.Printf("Fetch Handler recieved: %s", string(payload))
