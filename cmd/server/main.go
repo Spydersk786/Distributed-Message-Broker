@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -13,8 +14,13 @@ import (
 )
 
 func main() {
+    dataDir := "data"
+    if err := os.MkdirAll(dataDir, 0755); err != nil{
+        log.Fatalf("Failed to create Data Directory: %v", err)
+    }
+
     router := protocol.NewRouter()
-    topicMgr := topic.NewManager()
+    topicMgr := topic.NewManager(dataDir)
 
     router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
 

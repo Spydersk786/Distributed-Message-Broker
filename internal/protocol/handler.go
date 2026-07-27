@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 
 	"github.com/Spydersk786/broker/internal/topic"
 )
@@ -23,8 +24,14 @@ func HandleProduce(topicManager *topic.Manager) Handler{
 
 		message := payload[2+topicNameLen:]
 
-		topic := topicManager.GetOrCreate(topicName)
-		offset := topic.Append(message)
+		topic, err := topicManager.GetOrCreate(topicName); if err != nil{
+			log.Printf("Failed to create/get the topic: %v", err)
+			return nil, err
+		}
+		offset,err := topic.Append(message); if err != nil{
+			log.Printf("Failed to append message to disk: %v", err)
+			return nil, err
+		}
 
 		respBuf := make([]byte, 8)
 		binary.BigEndian.PutUint64(respBuf, uint64(offset))
