@@ -20,7 +20,10 @@ func main() {
     }
 
     router := protocol.NewRouter()
-    topicMgr := topic.NewManager(dataDir)
+    topicMgr, err := topic.NewManager(dataDir)
+    if err != nil{
+        log.Fatalf("Failed to create Topic Manager: %v", err)
+    }
 
     router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
 

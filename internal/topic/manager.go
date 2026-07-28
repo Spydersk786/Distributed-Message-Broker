@@ -1,7 +1,11 @@
 package topic
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/Spydersk786/broker/internal/storage"
@@ -9,13 +13,19 @@ import (
 
 type Topic struct{
 	name	 string
+	dir 	 string
 	segments []*storage.Segment
 	active	 *storage.Segment	
 	mu		 sync.RWMutex
 }
 
-func NewTopic(name string, dir string) (*Topic,error){
-	firstSeg,err := storage.NewSegment(dir, 0)
+func NewTopic(name string, baseDir string) (*Topic, error){
+	topicDir := filepath.Join(baseDir, name)
+	if err:= os.MkdirAll(topicDir, 0755); err != nil{
+		return nil, err
+	}
+
+	firstSeg,err := storage.NewSegment(topicDir, 0)
 
 	if err != nil{
 		return nil, err
@@ -23,6 +33,7 @@ func NewTopic(name string, dir string) (*Topic,error){
 
 	return &Topic{
 		name: name,
+		dir: topicDir,
 		segments: []*storage.Segment{firstSeg},
 		active: firstSeg,
 	}, nil
@@ -37,9 +48,10 @@ func (t *Topic) Append(msg []byte) (uint64, error){
 		return 0, err
 	}
 
+	// if t.active.Size() > 250{   // Used for testing functionality
 	// 1 GB == 1,073,741,824 bytes
 	if t.active.Size() > 1073741824{
-		newSeg,err := storage.NewSegment("data/dir", offset+1)
+		newSeg,err := storage.NewSegment(t.dir, offset+1)
 		if err != nil{
 			return 0, err
 		}
@@ -56,11 +68,14 @@ type Manager struct{
 	dataDir string
 }
 
-func NewManager(dataDir string) *Manager{
-	return &Manager{
+func NewManager(dataDir string) (*Manager, error){
+	m := &Manager{
 		topics: make(map[string]*Topic),
 		dataDir: dataDir,
 	}
+
+	err := m.recoverState()
+	return m, err
 }
 
 func (t *Topic) findSegment(targetOffset uint64) *storage.Segment{
@@ -107,4 +122,65 @@ func (m *Manager) GetOrCreate(name string) (*Topic, error){
 	}
 	m.topics[name] = newTopic
 	return newTopic, nil
+}
+
+func (m *Manager) recoverState() error{
+	entries, err := os.ReadDir(m.dataDir)
+	if err != nil{
+		if os.IsNotExist(err){
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries{
+		if entry.IsDir(){
+			topicName := entry.Name()
+			topic, err := loadTopic(topicName, m.dataDir) 
+			if err != nil{
+				return err
+			}
+			m.topics[topicName] = topic
+		}
+	}
+	return nil
+}
+
+func loadTopic(name string, baseDir string) (*Topic, error){
+	topicDir := filepath.Join(baseDir, name)
+	entries, err := os.ReadDir(topicDir)
+	if err != nil{
+		return nil, err
+	}
+
+	var segments []*storage.Segment
+
+	for _, entry := range entries{
+		if strings.HasSuffix(entry.Name(), ".log"){
+			baseName := strings.TrimSuffix(entry.Name(), ".log")
+			baseOffset, err := strconv.ParseUint(baseName, 10, 64)
+			if err != nil{
+				return nil, err
+			}
+
+			seg, err := storage.NewSegment(topicDir, baseOffset)
+			if err != nil{
+				return nil, err
+			}
+
+			segments = append(segments, seg)
+		}
+	}
+
+	if len(segments) == 0{
+		return NewTopic(name, baseDir)
+	}
+
+	return &Topic{
+		name: name,
+		dir: topicDir,
+		// Already sorted so no need to sort
+		segments: segments,
+		active: segments[len(segments)-1],
+	}, nil
 }
