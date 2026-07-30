@@ -39,3 +39,35 @@ func HandleProduce(topicManager *topic.Manager) Handler{
 		return respBuf, nil
 	}
 }
+
+func HandleFetch(topicManager *topic.Manager) Handler{
+	return func(payload []byte) ([]byte, error){
+		if len(payload) < 2{
+			return nil, fmt.Errorf("payload too short for topic length")
+		}
+
+		topicNameLen := binary.BigEndian.Uint16(payload[:2])
+
+		if len(payload) < int(2+topicNameLen+8) {
+			return nil, fmt.Errorf("payload too short for offset")
+		}
+
+		topicName := string(payload[2:2+topicNameLen])
+
+		// Extract message offset to be extracted
+		offsetIdx := 2 + topicNameLen
+		offset := binary.BigEndian.Uint64(payload[offsetIdx:offsetIdx+8])
+
+		topic, err := topicManager.GetOrCreate(topicName)
+		if err != nil{
+			return nil, err
+		}
+
+		message, err := topic.Read(offset)
+		if err != nil{
+			return nil, err
+		}
+
+		return message, nil
+	}
+}

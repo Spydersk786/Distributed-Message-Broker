@@ -26,12 +26,7 @@ func main() {
     }
 
     router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
-
-    router.Register(protocol.FetchCmd, func(payload []byte) ([]byte, error){
-        log.Printf("Fetch Handler recieved: %s", string(payload))
-        return []byte("Fetch Succeeded"), nil
-    })
-
+    router.Register(protocol.FetchCmd, protocol.HandleFetch(topicMgr))
 
     server := network.NewServer(":8090", router)
 

@@ -1,6 +1,7 @@
 package topic
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,10 +49,10 @@ func (t *Topic) Append(msg []byte) (uint64, error){
 		return 0, err
 	}
 
-	// if t.active.Size() > 250{   // Used for testing functionality
+	if t.active.Size() > 250{   // Used for testing functionality
 	// 1 GB == 1,073,741,824 bytes
-	if t.active.Size() > 1073741824{
-		newSeg,err := storage.NewSegment(t.dir, offset+1)
+	// if t.active.Size() > 1073741824{
+		newSeg, err := storage.NewSegment(t.dir, offset+1)
 		if err != nil{
 			return 0, err
 		}
@@ -60,6 +61,15 @@ func (t *Topic) Append(msg []byte) (uint64, error){
 	}
 
 	return offset, nil
+}
+
+func (t *Topic) Read(offset uint64) ([]byte, error){
+	seg := t.findSegment(offset)
+	if seg == nil{
+		return nil, fmt.Errorf("offset %d not found in topic %s", offset, t.name)
+	}
+
+	return seg.Read(offset)
 }
 
 type Manager struct{

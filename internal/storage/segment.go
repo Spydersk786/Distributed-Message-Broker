@@ -50,13 +50,13 @@ func NewSegment(dir string, baseOffset uint64) (*Segment, error){
 	}, nil
 }
 
-func (s *Segment) Append(msg []byte) (uint64,error){
+func (s *Segment) Append(msg []byte) (uint64, error){
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// We will store the msg with its length then actual message
 	size := uint32(len(msg))
-	record := make([]byte,size)
+	record := make([]byte, 4 + size) // Bug fix
 
 	binary.BigEndian.PutUint32(record[0:4],size)
 	copy(record[4:],msg)
@@ -81,6 +81,39 @@ func (s *Segment) Append(msg []byte) (uint64,error){
 	s.currentPos += uint32(len(record))
 	
 	return offsetToReturn, nil
+}
+
+func (s *Segment) Read(offset uint64) ([]byte, error){
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if offset < s.baseOffset || offset >= s.nextOffset{
+		return nil, fmt.Errorf("offset %d out of bound of segment", offset)
+	}
+
+	relativeOffset := offset - s.baseOffset
+
+	// The starting idx of position of message 
+	indexPos := int64(relativeOffset*8 + 4)
+	posBuf := make([]byte, 4)
+	if _, err := s.indexFile.ReadAt(posBuf, indexPos); err != nil{
+		return nil, err
+	}
+
+	logPosition := binary.BigEndian.Uint32(posBuf)
+	sizeBuf := make([]byte, 4)
+	if _, err := s.logFile.ReadAt(sizeBuf, int64(logPosition)); err != nil{
+		return nil, err
+	}
+
+	msgSize := binary.BigEndian.Uint32(sizeBuf)
+	msgBuf := make([]byte, msgSize)
+	_, err := s.logFile.ReadAt(msgBuf, int64(logPosition)+4)
+	if err != nil{
+		return nil, fmt.Errorf("failed to read msg payload: %v", err)
+	}
+
+	return msgBuf, nil
 }
 
 func (s *Segment) Size() uint32{
