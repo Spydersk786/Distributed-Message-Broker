@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +13,7 @@ import (
 	"github.com/Spydersk786/broker/internal/network"
 	"github.com/Spydersk786/broker/internal/protocol"
 	"github.com/Spydersk786/broker/internal/topic"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -36,6 +39,21 @@ func main() {
     router.Register(protocol.FetchOffset, protocol.HandleFetchOffset(offsetMgr))
 
     server := network.NewServer(":8090", router)
+    mux := http.NewServeMux()
+
+    mux.Handle("/metrics", promhttp.Handler())
+
+    metricsServer := &http.Server{
+        Addr: ":2112",
+        Handler: mux,
+    }
+
+    go func()   {
+        fmt.Println("Metrics exposed at http://localhost:2112/metrics")
+        if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed{
+            log.Fatalf("Metrics server crashed: %v", err)
+        }
+    }()
 
     go func ()  {
         if err := server.Start(); err != nil {
@@ -57,6 +75,11 @@ func main() {
 
     shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
+
+    log.Println("Shuting down metrics server")
+    if err := metricsServer.Shutdown(shutdownCtx); err != nil{
+        log.Fatalf("Metrics Server Shutdown failed: %v", err)
+    }
 
     if err := server.Shutdown(shutdownCtx); err != nil{
         log.Fatalf("Server Shutdown failed: %v", err)

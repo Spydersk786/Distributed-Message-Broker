@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/Spydersk786/broker/internal/topic"
+	"github.com/Spydersk786/broker/internal/metrics"
 )
 
 func HandleProduce(topicManager *topic.Manager) Handler{
@@ -32,6 +33,8 @@ func HandleProduce(topicManager *topic.Manager) Handler{
 			log.Printf("Failed to append message to disk: %v", err)
 			return nil, err
 		}
+		metrics.MessagesProduced.WithLabelValues(topicName).Inc()
+		metrics.BytesWritten.WithLabelValues(topicName).Add(float64(len(message)))
 
 		respBuf := make([]byte, 8)
 		binary.BigEndian.PutUint64(respBuf, uint64(offset))
