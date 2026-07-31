@@ -16,13 +16,12 @@ func main() {
     }
     defer conn.Close()
 
-    noOfProduce := 40
+    noOfProduce := 0
     noOfConsume := 10
-    topic := "orders.deleted"
-    ReadOffset := 14
+    topic := "orders.created"
     
     for i:=0; i<noOfProduce ;i++{
-        msgStr := fmt.Sprintf("Order ID: %d", i)
+        msgStr := fmt.Sprintf("Order ID: %d", (40+i))
         message := []byte(msgStr)
     
         // PRODUCE THE MESSAGE
@@ -47,7 +46,13 @@ func main() {
         fmt.Printf("Produce Succeeded! offset:%d\n", offset)
     }
 
+    group := "billing-service"
+
     for i:=0; i<noOfConsume ;i++{
+        currentOffset, err := fetchOffset(conn, group, topic)
+        if err != nil{
+            log.Fatalf("Failed to fetch offest %v", err)
+        }
         fetchCmd := byte(2)
 
         fetchPayload := make([]byte, 2+len(topic)+8)
@@ -55,7 +60,7 @@ func main() {
         copy(fetchPayload[2:], []byte(topic))
 
         offsetIdx := 2 + len(topic)
-        binary.BigEndian.PutUint64(fetchPayload[offsetIdx:offsetIdx+8], uint64(ReadOffset))
+        binary.BigEndian.PutUint64(fetchPayload[offsetIdx:offsetIdx+8], uint64(currentOffset))
 
         fetchReq := buildRequest(fetchCmd, fetchPayload)
         if _, err := conn.Write(fetchReq); err != nil{
@@ -65,7 +70,10 @@ func main() {
         fetchResp := readResponse(conn)
         fmt.Printf("Fetched message payload: '%s'\n", string(fetchResp))
         
-        ReadOffset = ReadOffset + 1
+        currentOffset, err = commitOffset(conn, currentOffset, group, topic)
+        if err != nil{
+            log.Fatalf("Failed to commit the offset %v", err)
+        }
     }
 }
 
@@ -98,3 +106,50 @@ func readResponse(conn net.Conn) []byte{
     return responseBuf
 }
 
+func fetchOffset(conn net.Conn, group string, topic string) (int64, error){
+    fetchOffCmd := byte(4)
+    fetchOffPayload := make([]byte, 2+len(group)+len(topic))
+    binary.BigEndian.PutUint16(fetchOffPayload[:2], uint16(len(group)))
+    copy(fetchOffPayload[2:2+len(group)], group)
+    copy(fetchOffPayload[2+len(group):], topic)
+
+    if _, err := conn.Write(buildRequest(fetchOffCmd, fetchOffPayload)); err != nil{
+        log.Fatalf("Failed to Write fetch offset req: %v", err)
+    }
+
+    fetchOffResp := readResponse(conn)
+    currentOffset := binary.BigEndian.Uint64(fetchOffResp)
+    fmt.Printf("Group '%s' is at offset '%d' \n", group, currentOffset)
+    return int64(currentOffset), nil
+}
+
+func commitOffset(conn net.Conn, currentOffset int64, group string, topic string) (int64, error){
+    nextOffset := currentOffset + 1
+    commitCmd := byte(3)
+
+
+    commitPayload := make([]byte, 2+len(group)+2+len(topic)+8)
+    idx := 0
+    binary.BigEndian.PutUint16(commitPayload[idx:idx+2], uint16(len(group)))
+    idx += 2
+    copy(commitPayload[idx:idx+len(group)], []byte(group))
+    idx += len(group)
+
+    binary.BigEndian.PutUint16(commitPayload[idx:idx+2], uint16(len(topic)))
+    idx += 2
+    copy(commitPayload[idx:idx+len(topic)], []byte(topic))
+    idx += len(topic)
+
+    binary.BigEndian.PutUint64(commitPayload[idx:], uint64(nextOffset))
+
+    if _, err := conn.Write(buildRequest(commitCmd, commitPayload)); err != nil{
+        return currentOffset, err
+    }
+
+    commitResp := readResponse(conn)
+    if commitResp[0] == 1{
+        fmt.Printf("Successfully committed next offset: %d \n", nextOffset)
+    }
+
+    return nextOffset, nil
+}

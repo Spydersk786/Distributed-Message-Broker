@@ -9,6 +9,8 @@ type CommandCode byte
 const (
 	ProduceCmd CommandCode = 1
 	FetchCmd   CommandCode = 2
+	CommitOffset   CommandCode = 3
+	FetchOffset   CommandCode = 4
 )
 
 type Handler func(payload []byte) ([]byte, error)

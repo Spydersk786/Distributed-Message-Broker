@@ -71,3 +71,49 @@ func HandleFetch(topicManager *topic.Manager) Handler{
 		return message, nil
 	}
 }
+
+// We explicity need a commit req instead of automatic commits
+// In case message is delivered to client and it crashed before
+// processing it and need the same message again. 
+func HandleCommitOffset(om *topic.OffsetManager) Handler{
+	return func(payload []byte) ([]byte, error){
+		// [GroupLen(2)] [Group] [TopicLen(2)] [Topic] [offset(8)]
+		idx := 0
+		groupLen := binary.BigEndian.Uint16(payload[idx:idx+2])
+		idx +=2
+		group := string(payload[idx:idx+int(groupLen)])
+		idx += int(groupLen)
+
+		topicLen := binary.BigEndian.Uint16(payload[idx:idx+2])
+		idx +=2
+		topic := string(payload[idx:idx+int(topicLen)])
+		idx += int(topicLen)
+
+		offset := binary.BigEndian.Uint64(payload[idx:idx+8])
+
+		err := om.CommitOffset(group, topic, offset, payload)
+		if err != nil{
+			return nil, err
+		}
+
+		return []byte{1}, nil // Success ACK
+	}
+}
+
+func HandleFetchOffset(om *topic.OffsetManager) Handler{
+	return func(payload []byte) ([]byte, error){
+		idx := 0
+		groupLen := binary.BigEndian.Uint16(payload[idx:idx+2])
+		idx +=2
+		group := string(payload[idx:idx+int(groupLen)])
+		idx += int(groupLen)
+
+		topic := string(payload[idx:]) // Rest of the payload is topic name
+
+		offset := om.FetchOffset(group, topic)
+
+		resp := make([]byte, 8)
+		binary.BigEndian.PutUint64(resp, offset)
+		return resp, nil
+	}
+}

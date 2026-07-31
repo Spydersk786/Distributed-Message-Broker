@@ -25,8 +25,15 @@ func main() {
         log.Fatalf("Failed to create Topic Manager: %v", err)
     }
 
+    offsetMgr, err := topic.NewOffsetManager(topicMgr)
+    if err != nil{
+        log.Fatalf("Failed to create Offset Manager: %v", err)
+    }
+
     router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
     router.Register(protocol.FetchCmd, protocol.HandleFetch(topicMgr))
+    router.Register(protocol.CommitOffset, protocol.HandleCommitOffset(offsetMgr))
+    router.Register(protocol.FetchOffset, protocol.HandleFetchOffset(offsetMgr))
 
     server := network.NewServer(":8090", router)
 

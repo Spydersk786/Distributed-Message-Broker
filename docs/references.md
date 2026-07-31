@@ -7,3 +7,8 @@
 
  - https://www.rabbitmq.com/blog/2025/01/17/how-are-the-messages-stored
  - https://www.rabbitmq.com/docs/classic-queues
+
+## Customer Offset Management
+
+ - https://developer.confluent.io/learn-more/kafka-on-the-go/consumer-groups/
+ - https://docs.confluent.io/platform/current/clients/config-index.html
