@@ -1,6 +1,7 @@
 package topic
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,20 @@ func (t *Topic) Read(offset uint64) ([]byte, error){
 	}
 
 	return seg.Read(offset)
+}
+
+func (t *Topic) Close() error{
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var errs []error
+
+	for _, seg := range t.segments{
+		if err := seg.Close(); err != nil{
+			errs = append(errs, err)
+		} 
+	}
+	return errors.Join(errs...)
 }
 
 type Manager struct{
@@ -154,6 +169,21 @@ func (m *Manager) recoverState() error{
 		}
 	}
 	return nil
+}
+
+func (m *Manager) Close() error{
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var errs []error
+
+	for _, t := range m.topics{
+		if err := t.Close(); err != nil{
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func loadTopic(name string, baseDir string) (*Topic, error){

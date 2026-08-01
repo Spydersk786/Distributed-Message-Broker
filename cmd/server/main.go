@@ -85,5 +85,12 @@ func main() {
         log.Fatalf("Server Shutdown failed: %v", err)
     }
 
+    log.Println("Closing disk Storage...")
+    if err := topicMgr.Close(); err != nil{
+        log.Printf("Storage teardown finished with error: %v", err)
+    }else{
+        log.Println("Storage safely closed.")
+    }
+
     log.Println("Server exited cleanly.")
 }

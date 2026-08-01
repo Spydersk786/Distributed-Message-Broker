@@ -126,3 +126,18 @@ func (s *Segment) Size() uint32{
 func (s *Segment) BaseOffset() uint64{
 	return s.baseOffset
 }
+
+func (s *Segment) Close() error{
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.logFile.Close(); err != nil{
+		return err
+	}
+
+	if err := s.indexFile.Close(); err != nil{
+		return err
+	}
+
+	return nil
+}
