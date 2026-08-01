@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  broker:
+    build: .
+    container_name: go_message_broker
+    ports:
+      - "8090:8090"
+      - "2112:2112"
+    volumes:
+      - broker_data:/app/broker_data
+    networks:
+      - broker-net
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: broker_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prom_data:/prometheus
+    networks:
+      - broker-net
+    depends_on:
+      - broker
+    
+  grafana:
+    image: grafana/grafana:latest
+    container_name: broker_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - broker-net
+    depends_on:
+      - prometheus
+
+volumes:
+  broker_data:
+  prom_data:
+  grafana_data:
+
+networks:
+  broker-net:
+    driver: bridge
+
+
+      
