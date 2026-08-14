@@ -11,6 +11,7 @@ const (
 	FetchCmd   CommandCode = 2
 	CommitOffset   CommandCode = 3
 	FetchOffset   CommandCode = 4
+	GossipCmd	CommandCode = 5
 )
 
 type Handler func(payload []byte) ([]byte, error)

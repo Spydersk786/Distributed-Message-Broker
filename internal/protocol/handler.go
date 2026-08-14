@@ -107,7 +107,7 @@ func HandleFetchOffset(om *topic.OffsetManager) Handler{
 	return func(payload []byte) ([]byte, error){
 		idx := 0
 		groupLen := binary.BigEndian.Uint16(payload[idx:idx+2])
-		idx +=2
+		idx += 2
 		group := string(payload[idx:idx+int(groupLen)])
 		idx += int(groupLen)
 

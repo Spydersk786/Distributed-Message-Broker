@@ -7,17 +7,39 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Spydersk786/broker/internal/cluster"
 	"github.com/Spydersk786/broker/internal/network"
 	"github.com/Spydersk786/broker/internal/protocol"
 	"github.com/Spydersk786/broker/internal/topic"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+func getEnv(key string, fallback string) string{
+    if value, exists := os.LookupEnv(key); exists{
+        return value
+    }
+
+    return fallback
+}
 func main() {
-    dataDir := "data"
+    idStr := getEnv("BROKER_ID", "1")
+    nodeID, _ := strconv.Atoi(idStr)
+
+    tcpPort := getEnv("TCP_PORT", "8090")
+    metricsPort := getEnv("METRICS_PORT", "2112")
+    dataDir := getEnv("DATA_DIR", "data")
+    seedEnv := getEnv("SEEDS", "")
+
+    var seedNodes []string
+    if seedEnv != ""{
+        seedNodes = strings.Split(seedEnv, ",")
+    }
+
     if err := os.MkdirAll(dataDir, 0755); err != nil{
         log.Fatalf("Failed to create Data Directory: %v", err)
     }
@@ -33,18 +55,27 @@ func main() {
         log.Fatalf("Failed to create Offset Manager: %v", err)
     }
 
+    host := getEnv("HOSTNAME", "localhost")
+    localAddr := fmt.Sprintf("%s:%s", host, tcpPort)
+
+    clusterMgr, err := cluster.NewClusterManager(uint32(nodeID), localAddr)
+    if err != nil{
+        log.Fatalf("Failed to create Offset Manager: %v", err)
+    }
+
     router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
     router.Register(protocol.FetchCmd, protocol.HandleFetch(topicMgr))
     router.Register(protocol.CommitOffset, protocol.HandleCommitOffset(offsetMgr))
     router.Register(protocol.FetchOffset, protocol.HandleFetchOffset(offsetMgr))
+    router.Register(protocol.GossipCmd, cluster.HandleGossip(clusterMgr))
 
-    server := network.NewServer(":8090", router)
+    server := network.NewServer(":"+tcpPort, router)
     mux := http.NewServeMux()
 
     mux.Handle("/metrics", promhttp.Handler())
 
     metricsServer := &http.Server{
-        Addr: ":2112",
+        Addr: ":"+metricsPort,
         Handler: mux,
     }
 
@@ -65,6 +96,8 @@ func main() {
     ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer stop() // Restore default signal behaviour once we are done
 
+    log.Println("Starting background Gossip worker...")
+    clusterMgr.StartGossip(ctx, seedNodes)
     // Block until OS sends a signal, which cancels the context
     <-ctx.Done()
     // Restoring the OS behaviour to the signals before main function ends

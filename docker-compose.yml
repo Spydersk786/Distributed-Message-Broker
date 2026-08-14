@@ -1,16 +1,60 @@
 version: '3.8'
 
 services:
-  broker:
+  broker-1:
     build: .
-    container_name: go_message_broker
+    container_name: go_message_broker-1
+    hostname: broker-1
+    environment:
+      - BROKER_ID=1
+      - TCP_PORT=8090
+      - METRICS_PORT=2112
+      - DATA_DIR=/app/broker_data
+      - SEEDS=
     ports:
-      - "8090:8090"
-      - "2112:2112"
+      - "8091:8090"
     volumes:
-      - broker_data:/app/broker_data
+      - broker1_data:/app/broker_data
     networks:
       - broker-net
+
+  broker-2:
+    build: .
+    container_name: go_message_broker-2
+    hostname: broker-2
+    environment:
+      - BROKER_ID=2
+      - TCP_PORT=8090
+      - METRICS_PORT=2112
+      - DATA_DIR=/app/broker_data
+      - SEEDS=broker-1:8090
+    ports:
+      - "8092:8090"
+    volumes:
+      - broker2_data:/app/broker_data
+    networks:
+      - broker-net
+    depends_on:
+      - broker-1
+
+  broker-3:
+    build: .
+    container_name: go_message_broker-3
+    hostname: broker-3
+    environment:
+      - BROKER_ID=3
+      - TCP_PORT=8090
+      - METRICS_PORT=2112
+      - DATA_DIR=/app/broker_data
+      - SEEDS=broker-1:8090
+    ports:
+      - "8093:8090"
+    volumes:
+      - broker3_data:/app/broker_data
+    networks:
+      - broker-net
+    depends_on:
+      - broker-1
   
   prometheus:
     image: prom/prometheus:latest
@@ -22,8 +66,6 @@ services:
       - prom_data:/prometheus
     networks:
       - broker-net
-    depends_on:
-      - broker
     
   grafana:
     image: grafana/grafana:latest
@@ -40,6 +82,9 @@ services:
       - prometheus
 
 volumes:
+  broker1_data:
+  broker2_data:
+  broker3_data:
   broker_data:
   prom_data:
   grafana_data:

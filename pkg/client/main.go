@@ -16,8 +16,8 @@ func main() {
     }
     defer conn.Close()
 
-    noOfProduce := 0
-    noOfConsume := 10
+    noOfProduce := 3
+    noOfConsume := 15
     topic := "orders.created"
     
     for i:=0; i<noOfProduce ;i++{
@@ -46,7 +46,7 @@ func main() {
         fmt.Printf("Produce Succeeded! offset:%d\n", offset)
     }
 
-    group := "billing-service"
+    group := "payment-service"
 
     for i:=0; i<noOfConsume ;i++{
         currentOffset, err := fetchOffset(conn, group, topic)
@@ -74,6 +74,27 @@ func main() {
         if err != nil{
             log.Fatalf("Failed to commit the offset %v", err)
         }
+    }
+
+    address := "localhost:9000"
+    payload := make([]byte , 2+4+2+len(address))
+    idx := 0
+    binary.BigEndian.PutUint16(payload[idx:idx+2],uint16(1))
+    idx += 2
+    binary.BigEndian.PutUint32(payload[idx:idx+4],uint32(2))
+    idx += 4
+    binary.BigEndian.PutUint16(payload[idx:idx+2],uint16(len(address)))
+    idx += 2
+    copy(payload[idx:], []byte(address))
+    if _, err := conn.Write(buildRequest(5, payload)); err != nil{
+        log.Fatalf("Failed to gossip: %v", err)
+    }
+
+    gossipResponse := readResponse(conn)
+    if(len(gossipResponse) != 0){
+        log.Println("Unexpected Response")
+    }else {
+        log.Println("Gossip Succeeded")
     }
 }
 
