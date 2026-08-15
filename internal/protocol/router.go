@@ -12,6 +12,7 @@ const (
 	CommitOffset   CommandCode = 3
 	FetchOffset   CommandCode = 4
 	GossipCmd	CommandCode = 5
+	DiscoverPartitionsCmd CommandCode = 6
 )
 
 type Handler func(payload []byte) ([]byte, error)
@@ -26,11 +27,11 @@ func NewRouter() (*Router){
 	}
 }
 
-func (r *Router) Register(code CommandCode,h Handler){
+func (r *Router) Register(code CommandCode, h Handler){
 	r.handlers[code] = h
 }
 
-func (r *Router) Route(code CommandCode,payload []byte) ([]byte,error) {
+func (r *Router) Route(code CommandCode, payload []byte) ([]byte, error) {
 	handler, exists := r.handlers[code]
 	if !exists {
 		return nil, fmt.Errorf("Unsupported command code %d", code)

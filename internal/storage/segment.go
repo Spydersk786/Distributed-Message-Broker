@@ -127,6 +127,12 @@ func (s *Segment) BaseOffset() uint64{
 	return s.baseOffset
 }
 
+func (s *Segment) NextOffset() uint64{
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nextOffset
+}
+
 func (s *Segment) Close() error{
 	s.mu.Lock()
 	defer s.mu.Unlock()

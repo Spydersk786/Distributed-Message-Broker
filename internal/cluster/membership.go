@@ -42,7 +42,6 @@ func (m *Manager) MergePeers(incoming []Peer){
 		}
 
 		existing, exists := m.peers[p.ID]
-
 		if !exists{
 			log.Printf("[Cluster] Discovered new broker: ID=%d Address=%s", p.ID, p.Address)
 			m.peers[p.ID] = &Peer{
@@ -50,9 +49,11 @@ func (m *Manager) MergePeers(incoming []Peer){
 				Address:p.Address,
 				LastSeen:time.Now(),
 			}
-		} else{
-			existing.LastSeen = time.Now()
+			continue
 		}
+
+		existing.Address = p.Address
+		existing.LastSeen = time.Now()
 	}
 }
 
@@ -123,10 +124,10 @@ func (m *Manager) EvictDeadPeers(timeout time.Duration){
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cuttoff := time.Now().Add(-timeout)
+	cutoff := time.Now().Add(-timeout)
 
 	for id, peer := range m.peers{
-		if peer.LastSeen.Before(cuttoff){
+		if peer.LastSeen.Before(cutoff){
 			log.Printf("[Cluster] Broker %d (%s) is unreachable. Evicting from cluster.", id, peer.Address)
 			delete(m.peers, id)
 		}

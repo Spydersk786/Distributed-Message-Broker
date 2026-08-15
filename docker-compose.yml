@@ -85,7 +85,6 @@ volumes:
   broker1_data:
   broker2_data:
   broker3_data:
-  broker_data:
   prom_data:
   grafana_data:
 

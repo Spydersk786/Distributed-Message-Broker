@@ -23,8 +23,8 @@ func (m *Manager) StartGossip(ctx context.Context, seedNodes []string){
 				log.Println("[Cluster] Stopping background gossip worker")
 				return
 			case <- ticker.C:
-				m.EvictDeadPeers(15*time.Second)
 				m.gossipRound(seedNodes)
+				m.EvictDeadPeers(15*time.Second)
 			}
 		}
 	}()

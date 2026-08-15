@@ -14,6 +14,7 @@ import (
 
 	"github.com/Spydersk786/broker/internal/cluster"
 	"github.com/Spydersk786/broker/internal/network"
+	"github.com/Spydersk786/broker/internal/handler"
 	"github.com/Spydersk786/broker/internal/protocol"
 	"github.com/Spydersk786/broker/internal/topic"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -45,7 +46,7 @@ func main() {
     }
 
     router := protocol.NewRouter()
-    topicMgr, err := topic.NewManager(dataDir)
+    topicMgr, err := topic.NewManager(dataDir, uint32(nodeID), 3)
     if err != nil{
         log.Fatalf("Failed to create Topic Manager: %v", err)
     }
@@ -63,11 +64,12 @@ func main() {
         log.Fatalf("Failed to create Offset Manager: %v", err)
     }
 
-    router.Register(protocol.ProduceCmd, protocol.HandleProduce(topicMgr))
-    router.Register(protocol.FetchCmd, protocol.HandleFetch(topicMgr))
-    router.Register(protocol.CommitOffset, protocol.HandleCommitOffset(offsetMgr))
-    router.Register(protocol.FetchOffset, protocol.HandleFetchOffset(offsetMgr))
+    router.Register(protocol.ProduceCmd, handler.HandleProduce(topicMgr, clusterMgr))
+    router.Register(protocol.FetchCmd, handler.HandleFetch(topicMgr, clusterMgr))
+    router.Register(protocol.CommitOffset, handler.HandleCommitOffset(offsetMgr, clusterMgr))
+    router.Register(protocol.FetchOffset, handler.HandleFetchOffset(offsetMgr, clusterMgr))
     router.Register(protocol.GossipCmd, cluster.HandleGossip(clusterMgr))
+    router.Register(protocol.DiscoverPartitionsCmd, handler.HandleMetaDataSync(topicMgr))
 
     server := network.NewServer(":"+tcpPort, router)
     mux := http.NewServeMux()
@@ -98,6 +100,10 @@ func main() {
 
     log.Println("Starting background Gossip worker...")
     clusterMgr.StartGossip(ctx, seedNodes)
+
+    log.Println("Starting background Replicator worker...")
+    cluster.StartReplicator(ctx, topicMgr, clusterMgr)
+
     // Block until OS sends a signal, which cancels the context
     <-ctx.Done()
     // Restoring the OS behaviour to the signals before main function ends

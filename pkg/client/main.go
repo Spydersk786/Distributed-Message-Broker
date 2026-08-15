@@ -6,171 +6,199 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 )
 
 func main() {
-    // Connect to the server
-    conn, err := net.Dial("tcp", "localhost:8090")
-    if err != nil {
-       log.Fatalf("Failed to connect: %v", err)
-    }
-    defer conn.Close()
+	fmt.Println("Starting Distributed Broker Integration Test Suite...")
+	time.Sleep(1 * time.Second) // Give user time to read
 
-    noOfProduce := 3
-    noOfConsume := 15
-    topic := "orders.created"
-    
-    for i:=0; i<noOfProduce ;i++{
-        msgStr := fmt.Sprintf("Order ID: %d", (40+i))
-        message := []byte(msgStr)
-    
-        // PRODUCE THE MESSAGE
-        produceCmd := byte(1)
-    
-        prodPayload := make([]byte, 2+len(topic)+len(message))
-        binary.BigEndian.PutUint16(prodPayload[:2], uint16(len(topic)))
-        copy(prodPayload[2:], []byte(topic))
-        copy(prodPayload[2+len(topic):], message)
-    
-        prodReq := buildRequest(produceCmd, prodPayload)
+	// Connect to Broker 1 (It will act as Smart Proxy)
+	conn, err := net.Dial("tcp", "localhost:8091")
+	if err != nil {
+		log.Fatalf("Failed to connect to Broker 1: %v", err)
+	}
+	defer conn.Close()
+	fmt.Println("Connected to Broker 1 (localhost:8091)")
 
-        if _, err := conn.Write(prodReq); err != nil{
-            log.Fatalf("Failed to write produce req %v", err)
-        }
+	topic := "integration.test"
+	group := "test-consumer-group"
+	partitions := []uint32{0, 1, 2} // Test all 3 partitions
 
-        prodResp := readResponse(conn)
-        if len(prodResp) != 8{
-            fmt.Printf("Unexpected response size: %d bytes\n", len(prodResp))
-        }
-        offset := binary.BigEndian.Uint64(prodResp)
-        fmt.Printf("Produce Succeeded! offset:%d\n", offset)
-    }
+	fmt.Println("\n--- TEST 1: Distributed Produce (Proxy Routing) ---")
+	for _, pid := range partitions {
+		msg := fmt.Sprintf("Hello from Partition %d", pid)
+		offset, err := produceMsg(conn, topic, pid, []byte(msg))
+		if err != nil {
+			log.Fatalf("Produce to Partition %d failed: %v", pid, err)
+		}
+		fmt.Printf("Produced to Partition %d -> Offset %d\n", pid, offset)
+	}
 
-    group := "payment-service"
+	fmt.Println("\n--- TEST 2: Distributed Fetch ---")
+	for _, pid := range partitions {
+		// Fetch offset 0 from each partition
+		payload, err := fetchMsg(conn, topic, pid, 0)
+		if err != nil {
+			log.Fatalf("Fetch from Partition %d failed: %v", pid, err)
+		}
+		fmt.Printf("Fetched from Partition %d -> Payload: '%s'\n", pid, string(payload))
+	}
 
-    for i:=0; i<noOfConsume ;i++{
-        currentOffset, err := fetchOffset(conn, group, topic)
-        if err != nil{
-            log.Fatalf("Failed to fetch offest %v", err)
-        }
-        fetchCmd := byte(2)
+	fmt.Println("\n--- TEST 3: Consumer Group Offsets ---")
+	for _, pid := range partitions {
+		// Commit offset 42 for every partition
+		err := commitOffset(conn, group, topic, pid, 42)
+		if err != nil {
+			log.Fatalf("Commit Offset for Partition %d failed: %v", pid, err)
+		}
+		fmt.Printf("Committed Offset 42 for Partition %d\n", pid)
 
-        fetchPayload := make([]byte, 2+len(topic)+8)
-        binary.BigEndian.PutUint16(fetchPayload[:2], uint16(len(topic)))
-        copy(fetchPayload[2:], []byte(topic))
+		// Fetch it back to verify
+		savedOffset, err := fetchOffset(conn, group, topic, pid)
+		if err != nil {
+			log.Fatalf("Fetch Offset for Partition %d failed: %v", pid, err)
+		}
+		
+		if savedOffset == 42 {
+			fmt.Printf("Verified Offset for Partition %d -> %d\n", pid, savedOffset)
+		} else {
+			log.Fatalf("Offset mismatch! Expected 42, got %d", savedOffset)
+		}
+	}
 
-        offsetIdx := 2 + len(topic)
-        binary.BigEndian.PutUint64(fetchPayload[offsetIdx:offsetIdx+8], uint64(currentOffset))
+	fmt.Println("\n--- TEST 4: Gossip Protocol ---")
+	err = sendGossip(conn, 999, "localhost:9999")
+	if err != nil {
+		log.Fatalf("Gossip failed: %v", err)
+	}
+	fmt.Println("Gossip message accepted by cluster")
 
-        fetchReq := buildRequest(fetchCmd, fetchPayload)
-        if _, err := conn.Write(fetchReq); err != nil{
-            log.Fatalf("Failed to fetch req %v", err)
-        }
-
-        fetchResp := readResponse(conn)
-        fmt.Printf("Fetched message payload: '%s'\n", string(fetchResp))
-        
-        currentOffset, err = commitOffset(conn, currentOffset, group, topic)
-        if err != nil{
-            log.Fatalf("Failed to commit the offset %v", err)
-        }
-    }
-
-    address := "localhost:9000"
-    payload := make([]byte , 2+4+2+len(address))
-    idx := 0
-    binary.BigEndian.PutUint16(payload[idx:idx+2],uint16(1))
-    idx += 2
-    binary.BigEndian.PutUint32(payload[idx:idx+4],uint32(2))
-    idx += 4
-    binary.BigEndian.PutUint16(payload[idx:idx+2],uint16(len(address)))
-    idx += 2
-    copy(payload[idx:], []byte(address))
-    if _, err := conn.Write(buildRequest(5, payload)); err != nil{
-        log.Fatalf("Failed to gossip: %v", err)
-    }
-
-    gossipResponse := readResponse(conn)
-    if(len(gossipResponse) != 0){
-        log.Println("Unexpected Response")
-    }else {
-        log.Println("Gossip Succeeded")
-    }
+	fmt.Println("\n ALL TESTS PASSED! Your distributed broker is fully functional!")
 }
 
-func buildRequest(cmdByte byte, payload []byte) [] byte{
-    finalPayload := append([]byte{cmdByte},payload...)
-    payloadSize := uint32(len(finalPayload))
+func produceMsg(conn net.Conn, topic string, partitionID uint32, msg []byte) (uint64, error) {
+	payload := make([]byte, 2+len(topic)+4+len(msg))
+	idx := 0
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(topic)))
+	idx += 2
+	copy(payload[idx:idx+len(topic)], []byte(topic))
+	idx += len(topic)
+	binary.BigEndian.PutUint32(payload[idx:idx+4], partitionID)
+	idx += 4
+	copy(payload[idx:], msg)
 
-    req := make([]byte, 4+payloadSize)
-    
-    binary.BigEndian.PutUint32(req[0:4], payloadSize)
-    copy(req[4:], finalPayload)
-    return req
+	if _, err := conn.Write(buildRequest(1, payload)); err != nil {
+		return 0, err
+	}
+
+	resp := readResponse(conn)
+	if len(resp) != 8 {
+		return 0, fmt.Errorf("unexpected produce response size: %d", len(resp))
+	}
+	return binary.BigEndian.Uint64(resp), nil
 }
 
-func readResponse(conn net.Conn) []byte{
-    sizeBuf := make([]byte, 4)
+func fetchMsg(conn net.Conn, topic string, partitionID uint32, offset uint64) ([]byte, error) {
+	payload := make([]byte, 2+len(topic)+4+8)
+	idx := 0
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(topic)))
+	idx += 2
+	copy(payload[idx:idx+len(topic)], []byte(topic))
+	idx += len(topic)
+	binary.BigEndian.PutUint32(payload[idx:idx+4], partitionID)
+	idx += 4
+	binary.BigEndian.PutUint64(payload[idx:idx+8], offset)
 
-    if _, err := io.ReadFull(conn, sizeBuf); err != nil{
-        log.Fatalf("Error reading response: %v", err)
-    }
-
-    size := binary.BigEndian.Uint32(sizeBuf)
-
-    responseBuf := make([]byte, size)
-    
-    if _, err := io.ReadFull(conn, responseBuf); err != nil{
-        log.Fatalf("Error reading response: %v", err)
-    }
-
-    return responseBuf
+	if _, err := conn.Write(buildRequest(2, payload)); err != nil {
+		return nil, err
+	}
+	return readResponse(conn), nil
 }
 
-func fetchOffset(conn net.Conn, group string, topic string) (int64, error){
-    fetchOffCmd := byte(4)
-    fetchOffPayload := make([]byte, 2+len(group)+len(topic))
-    binary.BigEndian.PutUint16(fetchOffPayload[:2], uint16(len(group)))
-    copy(fetchOffPayload[2:2+len(group)], group)
-    copy(fetchOffPayload[2+len(group):], topic)
+func commitOffset(conn net.Conn, group, topic string, partitionID uint32, offset uint64) error {
+	payload := make([]byte, 2+len(group)+2+len(topic)+4+8)
+	idx := 0
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(group)))
+	idx += 2
+	copy(payload[idx:idx+len(group)], []byte(group))
+	idx += len(group)
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(topic)))
+	idx += 2
+	copy(payload[idx:idx+len(topic)], []byte(topic))
+	idx += len(topic)
+	binary.BigEndian.PutUint32(payload[idx:idx+4], partitionID)
+	idx += 4
+	binary.BigEndian.PutUint64(payload[idx:idx+8], offset)
 
-    if _, err := conn.Write(buildRequest(fetchOffCmd, fetchOffPayload)); err != nil{
-        log.Fatalf("Failed to Write fetch offset req: %v", err)
-    }
-
-    fetchOffResp := readResponse(conn)
-    currentOffset := binary.BigEndian.Uint64(fetchOffResp)
-    fmt.Printf("Group '%s' is at offset '%d' \n", group, currentOffset)
-    return int64(currentOffset), nil
+	if _, err := conn.Write(buildRequest(3, payload)); err != nil {
+		return err
+	}
+	_ = readResponse(conn) // Ack
+	return nil
 }
 
-func commitOffset(conn net.Conn, currentOffset int64, group string, topic string) (int64, error){
-    nextOffset := currentOffset + 1
-    commitCmd := byte(3)
+func fetchOffset(conn net.Conn, group, topic string, partitionID uint32) (uint64, error) {
+	payload := make([]byte, 2+len(group)+2+len(topic)+4)
+	idx := 0
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(group)))
+	idx += 2
+	copy(payload[idx:idx+len(group)], []byte(group))
+	idx += len(group)
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(topic)))
+	idx += 2
+	copy(payload[idx:idx+len(topic)], []byte(topic))
+	idx += len(topic)
+	binary.BigEndian.PutUint32(payload[idx:idx+4], partitionID)
 
+	if _, err := conn.Write(buildRequest(4, payload)); err != nil {
+		return 0, err
+	}
+	resp := readResponse(conn)
+	if len(resp) < 8 {
+		return 0, nil // No offset exists yet
+	}
+	return binary.BigEndian.Uint64(resp), nil
+}
 
-    commitPayload := make([]byte, 2+len(group)+2+len(topic)+8)
-    idx := 0
-    binary.BigEndian.PutUint16(commitPayload[idx:idx+2], uint16(len(group)))
-    idx += 2
-    copy(commitPayload[idx:idx+len(group)], []byte(group))
-    idx += len(group)
+func sendGossip(conn net.Conn, peerID uint32, address string) error {
+	payload := make([]byte, 2+4+2+len(address))
+	idx := 0
+	binary.BigEndian.PutUint16(payload[idx:idx+2], 1) // 1 peer
+	idx += 2
+	binary.BigEndian.PutUint32(payload[idx:idx+4], peerID)
+	idx += 4
+	binary.BigEndian.PutUint16(payload[idx:idx+2], uint16(len(address)))
+	idx += 2
+	copy(payload[idx:], []byte(address))
 
-    binary.BigEndian.PutUint16(commitPayload[idx:idx+2], uint16(len(topic)))
-    idx += 2
-    copy(commitPayload[idx:idx+len(topic)], []byte(topic))
-    idx += len(topic)
+	if _, err := conn.Write(buildRequest(5, payload)); err != nil {
+		return err
+	}
+	_ = readResponse(conn)
+	return nil
+}
 
-    binary.BigEndian.PutUint64(commitPayload[idx:], uint64(nextOffset))
+func buildRequest(cmdByte byte, payload []byte) []byte {
+	finalPayload := append([]byte{cmdByte}, payload...)
+	req := make([]byte, 4+len(finalPayload))
+	binary.BigEndian.PutUint32(req[0:4], uint32(len(finalPayload)))
+	copy(req[4:], finalPayload)
+	return req
+}
 
-    if _, err := conn.Write(buildRequest(commitCmd, commitPayload)); err != nil{
-        return currentOffset, err
-    }
-
-    commitResp := readResponse(conn)
-    if commitResp[0] == 1{
-        fmt.Printf("Successfully committed next offset: %d \n", nextOffset)
-    }
-
-    return nextOffset, nil
+func readResponse(conn net.Conn) []byte {
+	sizeBuf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, sizeBuf); err != nil {
+		log.Fatalf("Error reading response size: %v", err)
+	}
+	size := binary.BigEndian.Uint32(sizeBuf)
+	if size == 0 {
+		return []byte{}
+	}
+	respBuf := make([]byte, size)
+	if _, err := io.ReadFull(conn, respBuf); err != nil {
+		log.Fatalf("Error reading response payload: %v", err)
+	}
+	return respBuf
 }

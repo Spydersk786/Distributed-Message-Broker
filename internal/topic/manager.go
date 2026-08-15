@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,63 +13,24 @@ import (
 )
 
 type Topic struct{
-	name	 string
-	dir 	 string
-	segments []*storage.Segment
-	active	 *storage.Segment	
-	mu		 sync.RWMutex
+	name	 	string
+	Partitions	map[uint32]*Partition
+	mu		 	sync.RWMutex
 }
 
-func NewTopic(name string, baseDir string) (*Topic, error){
-	topicDir := filepath.Join(baseDir, name)
-	if err:= os.MkdirAll(topicDir, 0755); err != nil{
-		return nil, err
-	}
-
-	firstSeg,err := storage.NewSegment(topicDir, 0)
-
-	if err != nil{
-		return nil, err
-	}
-
+func NewTopic(name string) (*Topic){
 	return &Topic{
 		name: name,
-		dir: topicDir,
-		segments: []*storage.Segment{firstSeg},
-		active: firstSeg,
-	}, nil
+		Partitions: make(map[uint32]*Partition),
+	}
 }
 
-func (t *Topic) Append(msg []byte) (uint64, error){
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (t *Topic) GetPartition(id uint32) (*Partition, bool){
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 
-	offset, err := t.active.Append(msg)
-	if err != nil{
-		return 0, err
-	}
-
-	if t.active.Size() > 250{   // Used for testing functionality
-	// 1 GB == 1,073,741,824 bytes
-	// if t.active.Size() > 1073741824{
-		newSeg, err := storage.NewSegment(t.dir, offset+1)
-		if err != nil{
-			return 0, err
-		}
-		t.segments = append(t.segments, newSeg)
-		t.active = newSeg
-	}
-
-	return offset, nil
-}
-
-func (t *Topic) Read(offset uint64) ([]byte, error){
-	seg := t.findSegment(offset)
-	if seg == nil{
-		return nil, fmt.Errorf("offset %d not found in topic %s", offset, t.name)
-	}
-
-	return seg.Read(offset)
+	p, exists := t.Partitions[id]
+	return p, exists
 }
 
 func (t *Topic) Close() error{
@@ -79,8 +39,8 @@ func (t *Topic) Close() error{
 
 	var errs []error
 
-	for _, seg := range t.segments{
-		if err := seg.Close(); err != nil{
+	for _, p := range t.Partitions{
+		if err := p.Close(); err != nil{
 			errs = append(errs, err)
 		} 
 	}
@@ -88,65 +48,69 @@ func (t *Topic) Close() error{
 }
 
 type Manager struct{
-	topics	map[string]*Topic
-	mu		sync.RWMutex
-	dataDir string
+	topics			map[string]*Topic
+	mu				sync.RWMutex
+	dataDir 		string
+	localID			uint32
+	totalBrokers 	uint32
 }
 
-func NewManager(dataDir string) (*Manager, error){
+func NewManager(dataDir string, localID uint32, totalBrokers uint32) (*Manager, error){
 	m := &Manager{
 		topics: make(map[string]*Topic),
 		dataDir: dataDir,
+		localID: localID,
+		totalBrokers: totalBrokers,
 	}
 
 	err := m.recoverState()
 	return m, err
 }
 
-func (t *Topic) findSegment(targetOffset uint64) *storage.Segment{
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if len(t.segments) == 0{
-		return nil
-	}
-
-	i := sort.Search(len(t.segments), func (i int) bool{
-		return t.segments[i].BaseOffset() > targetOffset
-	})
-
-	if i == 0{
-		return t.segments[0]
-	}
-
-	return t.segments[i-1]
+func (m *Manager) GetLeaderID(topicName string, partitionID uint32) uint32{
+	return CalculateLeader(topicName, partitionID, m.totalBrokers)
 }
 
-func (m *Manager) GetOrCreate(name string) (*Topic, error){
+func (m *Manager) GetLocalID() uint32{
+	return m.localID
+}
+
+func (m *Manager) GetAllPartitions() []*Partition{
 	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	t, exists := m.topics[name]
-
-	m.mu.RUnlock()
-
-	if exists{
-		return t, nil
+	var parts []*Partition
+	for _,t := range m.topics{
+		for _, p := range t.Partitions{
+			parts = append(parts, p)
+		}
 	}
 
+	return parts
+}
+
+func (m *Manager) GetOrCreatePartition(name string, partitionID uint32) (*Partition, error){
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Double check as a goroutine might have created it 
-	// while we were upgrading from RLock to Lock
-	if t, exists := m.topics[name]; exists{
-		return t, nil
+	t, exists := m.topics[name]
+	if !exists {
+		t = NewTopic(name)
+		m.topics[name] = t
 	}
 
-	newTopic, err := NewTopic(name, m.dataDir); if err != nil{
+	p, exists := t.Partitions[partitionID]
+	if exists{
+		return p, nil
+	}
+
+	newPartition, err := NewPartition(name, partitionID, m.dataDir, m.localID, m.totalBrokers)
+	if err != nil{
 		return nil, err
 	}
-	m.topics[name] = newTopic
-	return newTopic, nil
+
+	t.Partitions[partitionID] = newPartition
+	return newPartition, nil
 }
 
 func (m *Manager) recoverState() error{
@@ -160,12 +124,33 @@ func (m *Manager) recoverState() error{
 
 	for _, entry := range entries{
 		if entry.IsDir(){
-			topicName := entry.Name()
-			topic, err := loadTopic(topicName, m.dataDir) 
+			// folder name are like "topic.name-0", "topic.name-1" 
+			lastDash := strings.LastIndex(entry.Name(), "-")
+			if lastDash == -1{
+				continue 
+			}
+
+			topicName := entry.Name()[:lastDash]
+			partitionIDStr := entry.Name()[lastDash+1:] 
+
+			partitionID, err := strconv.ParseUint(partitionIDStr, 10, 32)
 			if err != nil{
 				return err
 			}
-			m.topics[topicName] = topic
+
+			partition, err := loadPartition(topicName, uint32(partitionID), m.dataDir, m.localID, m.totalBrokers)
+			if err != nil{
+				return err
+			}
+
+			m.mu.Lock()
+			t, exists := m.topics[topicName]
+			if !exists{
+				t = NewTopic(topicName)
+				m.topics[topicName] = t
+			}
+			t.Partitions[uint32(partitionID)] = partition
+			m.mu.Unlock()
 		}
 	}
 	return nil
@@ -186,9 +171,10 @@ func (m *Manager) Close() error{
 	return errors.Join(errs...)
 }
 
-func loadTopic(name string, baseDir string) (*Topic, error){
-	topicDir := filepath.Join(baseDir, name)
-	entries, err := os.ReadDir(topicDir)
+func loadPartition(topicName string, partitionID uint32, baseDir string, localBrokerID uint32, totalBrokers uint32) (*Partition, error){
+	dirName := fmt.Sprintf("%s-%d", topicName, partitionID)
+	partitionDir := filepath.Join(baseDir, dirName)
+	entries, err := os.ReadDir(partitionDir)
 	if err != nil{
 		return nil, err
 	}
@@ -203,7 +189,7 @@ func loadTopic(name string, baseDir string) (*Topic, error){
 				return nil, err
 			}
 
-			seg, err := storage.NewSegment(topicDir, baseOffset)
+			seg, err := storage.NewSegment(partitionDir, baseOffset)
 			if err != nil{
 				return nil, err
 			}
@@ -213,12 +199,21 @@ func loadTopic(name string, baseDir string) (*Topic, error){
 	}
 
 	if len(segments) == 0{
-		return NewTopic(name, baseDir)
+		return NewPartition(topicName, partitionID, baseDir, localBrokerID, totalBrokers)
 	}
 
-	return &Topic{
-		name: name,
-		dir: topicDir,
+	leaderID := CalculateLeader(topicName, partitionID, totalBrokers)
+	role := RoleFollower
+	if localBrokerID == leaderID{
+		role = RoleLeader
+	}
+
+	return &Partition{
+		ID: partitionID,
+		TopicName: topicName,
+		dir: partitionDir,
+		Role: role,
+		LeaderID: leaderID,
 		// Already sorted so no need to sort
 		segments: segments,
 		active: segments[len(segments)-1],
