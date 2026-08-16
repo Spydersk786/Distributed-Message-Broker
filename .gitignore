@@ -1,0 +1,16 @@
+# Binaries
+bin/
+*.exe
+*.out
+
+# Data directories (CRITICAL)
+data/
+data-*/
+
+# Go workspace
+*.test
+vendor/
+go.sum
+
+# OS specific
+.DS_Store

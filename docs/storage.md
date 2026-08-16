@@ -1,23 +1,33 @@
-# Storage Architecture
+# 💾 Storage Architecture
 
-The broker's storage engine is heavily inspired by Apache Kafka's log-structured design. It prioritizes sequential disk I/O over random access.
+The broker's storage engine heavily mirrors Apache Kafka’s log-structured design, prioritizing sequential disk I/O to achieve high throughput.
 
-## Append-Only Logs & Segments
-Data is not stored in a single massive file. A partition folder (e.g., `data/orders-0/`) contains multiple **Segments**.
-* A segment is rotated when it reaches a specific size threshold.
-* Files are named by their base offset (e.g., `00000000.log`, `00000250.log`).
+## Immutable Append-Only Segments
 
-## Dense Indexing
-Every `.log` file has a corresponding `.index` file.
-* **Log Record:** `[4-byte Message Size][Raw Bytes]`
-* **Index Record:** `[4-byte Relative Offset][4-byte Physical Byte Position]`
+Data is not stored in a single monolithic file. A partition folder (e.g., `data/orders-0/`) rotates through **Segments** based on size thresholds.
 
-**O(1) Reads:**
-Because the index entries are a fixed 8 bytes, reading an arbitrary offset requires zero searching:
-1. Find the correct segment using binary search on the in-memory segment list.
-2. Calculate the index file offset: `(TargetOffset - BaseOffset) * 8 bytes`.
-3. Use `os.File.ReadAt` to read the exact 8 bytes from the `.index` file.
-4. Extract the physical byte position and size, then use `os.File.ReadAt` to read the exact payload from the `.log` file.
+```text
+data/orders-0/
+ ├── 00000000.log    # Raw message bytes
+ ├── 00000000.index  # Dense offset index
+ ├── 00000250.log    # Rotated segment starting at offset 250
+ └── 00000250.index
+```
+
+## O(1) Reads via Dense Indexing
+
+Sequential appends are fast, but random reads are historically slow. The broker solves this using a dense `.index` file containing 8-byte records:
+
+- **[4 bytes]** Relative Offset
+- **[4 bytes]** Physical Byte Position in the `.log`
+
+### The Lookup Algorithm
+
+1. Locate the correct segment via binary search on the baseOffset array.
+2. Calculate the exact index position: `(TargetOffset - BaseOffset) * 8`.
+3. Perform an `os.ReadAt` on the `.index` file to extract the Physical Byte Position.
+4. Perform an `os.ReadAt` on the `.log` file to extract the exact message payload.
 
 ## Persistence & Crash Recovery
-On boot, the `TopicManager` scans the `data/` directory. For every partition folder, it parses the `.log` file names to rebuild the segment list in memory. Data is inherently crash-safe because it is strictly append-only; partial or corrupted tail-writes can be truncated on startup.
+
+Because records are strictly append-only, the system is inherently crash-resistant. On boot, the `TopicManager` scans the `data/` directory, parses file names, reconstructs the in-memory segment list, and safely resumes the `nextOffset` counter without requiring a complete file scan.

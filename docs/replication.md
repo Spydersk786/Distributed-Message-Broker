@@ -1,16 +1,35 @@
-# Replication Model
+### 4. `docs/replication.md`
 
-The broker utilizes a **Pull-Based Replication** strategy, operating completely asynchronously from the client write path.
+```markdown
+# 🔄 Replication Model
 
-## Leader/Follower Assignment
-Partition roles are assigned via a deterministic hash function: `(Hash(Topic) + PartitionID) % TotalBrokers`. This guarantees that every node in the cluster reaches the exact same conclusion about who owns a partition without needing a central coordinator.
+The broker implements a **Pull-Based Replication** strategy, operating completely asynchronously from the client write path.
 
-## The Background Replicator
-Followers do not wait for Leaders to push data. 
-1. **Metadata Sync:** Every 2 seconds, the Replicator worker polls known peers via a custom `CmdMetadataSync` TCP command.
-2. **Discovery:** If it discovers a partition where it is a Follower, it creates the underlying folder structure on its local disk.
-3. **Synchronization:** It sends a standard `CmdFetch` to the Leader requesting `NextOffset`. 
-4. **Append:** If the Leader returns bytes, the Follower bypasses the `RoleLeader` write checks and appends the raw bytes directly to its own storage engine.
+## Leader Assignment & Discovery
 
-## Consistency Guarantees
-Currently, the broker provides **Eventual Consistency**. Because replication is asynchronous, a Leader will ACK a client immediately after writing to its local disk. If the Leader crashes milliseconds later before Followers can pull the data, that specific message may be lost. (Kafka solves this with `acks=all`, requiring ISR syncs before ACKing—a planned future enhancement).
+Roles are computed deterministically. Followers do not wait for explicit instruction; they discover their responsibilities dynamically:
+1. Every 2 seconds, the background Replicator worker executes `CmdMetadataSync` against known peers.
+2. If it discovers a peer leading a partition that the local node does not have, it instantiates the directory locally.
+
+## The Pull-Fetcher Loop
+
+Once a partition folder exists, the Follower begins continuous synchronization.
+
+```mermaid
+sequenceDiagram
+    participant Leader
+    participant Follower
+    
+    loop Every 2 Seconds
+        Follower->>Leader: CmdFetch (Partition: 0, Offset: 42)
+        alt Data Exists
+            Leader-->>Follower: [Binary Payload]
+            Follower->>Follower: Bypass Leader Check & Append locally
+        else End of Log
+            Leader-->>Follower: [0-byte ACK]
+            Follower->>Follower: Wait for next tick
+        end
+    end
+
+Consistency Guarantees
+The system currently provides Eventual Consistency. A Leader ACKs the client immediately upon local disk flush. Replication happens asynchronously. (Note: Achieving strict consistency would require implementing an acks=all mechanism paired with In-Sync Replica (ISR) tracking, planned for a future consensus iteration).
