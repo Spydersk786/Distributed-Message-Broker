@@ -1,6 +1,3 @@
-### 4. `docs/replication.md`
-
-```markdown
 # 🔄 Replication Model
 
 The broker implements a **Pull-Based Replication** strategy, operating completely asynchronously from the client write path.
@@ -30,6 +27,7 @@ sequenceDiagram
             Follower->>Follower: Wait for next tick
         end
     end
+```
 
-Consistency Guarantees
+## Consistency Guarantees
 The system currently provides Eventual Consistency. A Leader ACKs the client immediately upon local disk flush. Replication happens asynchronously. (Note: Achieving strict consistency would require implementing an acks=all mechanism paired with In-Sync Replica (ISR) tracking, planned for a future consensus iteration).

@@ -1,6 +1,3 @@
-### 5. `docs/design-decisions.md`
-
-```markdown
 # 🧠 Design Decisions & Trade-offs
 
 | Component | Decision | Alternative | Trade-off / Rationale |
